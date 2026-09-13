@@ -64,7 +64,7 @@ def call_groq(client, messages):
     try:
         response = client.chat.completions.create(
             messages=messages,
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-120b",
             max_tokens=500,
         )
         return response.choices[0].message.content
