@@ -64,6 +64,11 @@ def call_groq(client, messages, max_tokens=700):
 
 st.title("Budget Coach")
 st.caption("Educational tool only. This is not licensed financial advice.")
+st.caption(
+    "How it works: your budget math (totals, ratios, risk flag) is always "
+    "computed by plain code, never by AI. The AI only writes the "
+    "plain-language explanation of numbers that are already correct."
+)
 
 if not GROQ_API_KEY:
     st.warning(
@@ -230,35 +235,69 @@ if submitted:
             if GROQ_API_KEY:
                 client = get_client()
                 prompt = build_explanation_prompt(result_dict)
-                explanation = call_groq(client, [{"role": "user", "content": prompt}])
-                st.subheader("What This Means")
-                st.write(explanation)
+                with st.spinner("Writing your explanation..."):
+                    explanation = call_groq(client, [{"role": "user", "content": prompt}])
+                st.session_state["last_explanation"] = explanation
+                st.session_state["last_prompt"] = prompt
 
             st.session_state["last_result"] = result_dict
 
+if "last_explanation" in st.session_state:
+    st.subheader("What This Means")
+    st.write(st.session_state["last_explanation"])
+    if "unavailable" in st.session_state["last_explanation"] and GROQ_API_KEY:
+        if st.button("Retry explanation"):
+            client = get_client()
+            with st.spinner("Trying again..."):
+                retried = call_groq(client, [{"role": "user", "content": st.session_state["last_prompt"]}])
+            st.session_state["last_explanation"] = retried
+            st.rerun()
+
 st.subheader("Ask a Follow-up Question")
 question = st.text_input("For example: what is an emergency fund?")
+
+if "qa_cache" not in st.session_state:
+    st.session_state.qa_cache = {}
 
 if st.button("Ask") and question.strip():
     if not GROQ_API_KEY:
         st.error("A Groq API key is required to answer questions. See the warning above.")
     else:
-        try:
-            index, chunks = get_rag_index()
-            context_chunks = retrieve(index, chunks, question, top_k=3)
-        except Exception:
-            context_chunks = []
+        cache_key = question.strip().lower()
+        if cache_key in st.session_state.qa_cache:
+            # Same question asked before this session - reuse the answer
+            # instead of spending another API call on it.
+            st.session_state["last_answer"] = st.session_state.qa_cache[cache_key]
+        else:
+            try:
+                index, chunks = get_rag_index()
+                context_chunks = retrieve(index, chunks, question, top_k=3)
+            except Exception:
+                context_chunks = []
 
-        context_text = "\n\n".join(context_chunks) if context_chunks else "No reference material found."
+            context_text = "\n\n".join(context_chunks) if context_chunks else "No reference material found."
 
-        followup_prompt = (
-            "You are a patient financial literacy coach. Answer the question "
-            "below using only the reference material provided. Keep the answer "
-            "short and in plain language.\n\n"
-            f"Reference material:\n{context_text}\n\n"
-            f"Question: {question}"
-        )
+            followup_prompt = (
+                "You are a patient financial literacy coach. Answer the question "
+                "below using only the reference material provided. Keep the answer "
+                "short and in plain language.\n\n"
+                f"Reference material:\n{context_text}\n\n"
+                f"Question: {question}"
+            )
 
-        client = get_client()
-        answer = call_groq(client, [{"role": "user", "content": followup_prompt}])
-        st.write(answer)
+            client = get_client()
+            with st.spinner("Looking that up..."):
+                answer = call_groq(client, [{"role": "user", "content": followup_prompt}])
+            st.session_state.qa_cache[cache_key] = answer
+            st.session_state["last_answer"] = answer
+            st.session_state["last_question_prompt"] = followup_prompt
+
+if "last_answer" in st.session_state:
+    st.write(st.session_state["last_answer"])
+    if "unavailable" in st.session_state["last_answer"] and GROQ_API_KEY:
+        if st.button("Retry answer"):
+            client = get_client()
+            with st.spinner("Trying again..."):
+                retried = call_groq(client, [{"role": "user", "content": st.session_state["last_question_prompt"]}])
+            st.session_state["last_answer"] = retried
+            st.rerun()
