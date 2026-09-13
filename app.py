@@ -1,5 +1,4 @@
 import os
-import re
 import pandas as pd
 import streamlit as st
 from groq import Groq
@@ -19,31 +18,6 @@ def get_client():
 @st.cache_resource
 def get_rag_index():
     return build_index("financial_literacy_kb.txt")
-
-
-def parse_expenses(raw_text):
-    expenses = {}
-    for line in raw_text.strip().split("\n"):
-        line = line.strip()
-        if not line:
-            continue
-        if ":" in line:
-            label, raw_amount = line.split(":", 1)
-        elif line.count("-") == 1:
-            # Only treat a single hyphen as a separator. Labels with
-            # hyphens ("day-to-day") or negative amounts would
-            # otherwise get misparsed by rsplit.
-            label, raw_amount = line.rsplit("-", 1)
-        else:
-            continue
-        label = label.strip()
-        if not label:
-            continue
-        match = re.search(r"\d+(\.\d+)?", raw_amount.replace(",", ""))
-        if not match:
-            continue
-        expenses[label] = float(match.group(0))
-    return expenses
 
 
 def build_explanation_prompt(result_dict):
@@ -96,25 +70,68 @@ with st.expander("Debug: environment check"):
     if GROQ_API_KEY:
         st.write("Key starts with:", GROQ_API_KEY[:4] + "..." if len(GROQ_API_KEY) > 4 else "(too short)")
 
-with st.form("budget_form"):
-    income = st.number_input("Monthly income (PKR)", min_value=0.0, step=500.0)
-    raw_expenses = st.text_area(
-        "Monthly expenses, one per line as label: amount",
-        placeholder="rent: 15000\ngroceries: 8000\ndebt repayment: 6000",
-        height=150,
-    )
-    submitted = st.form_submit_button("Analyze my budget")
+EXPENSE_CATEGORY_OPTIONS = [
+    "Rent", "Groceries", "Utilities", "Electricity", "Gas", "Water",
+    "Transport", "Medicine", "School fees", "Debt repayment",
+    "Loan repayment", "Eating out", "Entertainment", "Clothes",
+    "Subscriptions", "Gifts", "Mobile recharge", "Travel",
+    "Savings", "Committee", "Emergency fund", "Investment",
+    "Other (type your own)",
+]
+OTHER_OPTION = "Other (type your own)"
+
+if "expense_rows" not in st.session_state:
+    st.session_state.expense_rows = [{"category": EXPENSE_CATEGORY_OPTIONS[0], "custom": "", "amount": 0.0}]
+
+st.subheader("Monthly income and expenses")
+income = st.number_input("Monthly income (PKR)", min_value=0.0, step=500.0, key="income_input")
+
+st.write("Add each expense below. Pick a category, or choose 'Other' to add your own label.")
+
+for i in range(len(st.session_state.expense_rows)):
+    row = st.session_state.expense_rows[i]
+    col1, col2 = st.columns([3, 2])
+    with col1:
+        category = st.selectbox(
+            f"Category {i + 1}",
+            EXPENSE_CATEGORY_OPTIONS,
+            index=EXPENSE_CATEGORY_OPTIONS.index(row["category"]) if row["category"] in EXPENSE_CATEGORY_OPTIONS else 0,
+            key=f"cat_{i}",
+        )
+        custom_label = ""
+        if category == OTHER_OPTION:
+            custom_label = st.text_input(f"Custom label {i + 1}", value=row["custom"], key=f"custom_{i}")
+    with col2:
+        amount = st.number_input(f"Amount (PKR) {i + 1}", min_value=0.0, step=100.0, value=row["amount"], key=f"amt_{i}")
+    st.session_state.expense_rows[i] = {"category": category, "custom": custom_label, "amount": amount}
+
+add_col, remove_col = st.columns(2)
+with add_col:
+    if st.button("+ Add another expense"):
+        st.session_state.expense_rows.append({"category": EXPENSE_CATEGORY_OPTIONS[0], "custom": "", "amount": 0.0})
+        st.rerun()
+with remove_col:
+    if len(st.session_state.expense_rows) > 1 and st.button("- Remove last expense"):
+        st.session_state.expense_rows.pop()
+        st.rerun()
+
+submitted = st.button("Analyze my budget")
 
 if submitted:
     if income <= 0:
         st.error("Please enter an income greater than zero.")
     else:
-        expenses = parse_expenses(raw_expenses)
+        expenses = {}
+        for row in st.session_state.expense_rows:
+            if row["amount"] <= 0:
+                continue
+            label = row["custom"].strip() if row["category"] == OTHER_OPTION else row["category"]
+            if not label:
+                continue
+            expenses[label] = expenses.get(label, 0.0) + row["amount"]
+
         if not expenses:
-            st.error(
-                "No valid expense lines were found. Use one item per line, "
-                "for example: rent: 15000"
-            )
+            st.error("Add at least one expense with an amount greater than zero.")
         else:
             result = analyze_budget(income, expenses)
             result_dict = result.as_dict()
