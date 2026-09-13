@@ -65,11 +65,6 @@ if not GROQ_API_KEY:
         "plain-language explanation and chat answers will not."
     )
 
-with st.expander("Debug: environment check"):
-    st.write("GROQ_API_KEY loaded:", bool(GROQ_API_KEY))
-    if GROQ_API_KEY:
-        st.write("Key starts with:", GROQ_API_KEY[:4] + "..." if len(GROQ_API_KEY) > 4 else "(too short)")
-
 EXPENSE_CATEGORY_OPTIONS = [
     "Rent", "Groceries", "Utilities", "Electricity", "Gas", "Water",
     "Transport", "Medicine", "School fees", "Debt repayment",
@@ -138,14 +133,27 @@ if submitted:
 
             st.subheader("Your Budget Breakdown")
             chart_df = pd.DataFrame({
-                "Category": ["Needs", "Wants", "Savings"],
+                "Category": ["Needs", "Wants", "Savings", "Leftover"],
                 "Amount": [
                     result_dict["needs_total"],
                     result_dict["wants_total"],
                     result_dict["savings_total"],
+                    result_dict["leftover"],
                 ],
             }).set_index("Category")
             st.bar_chart(chart_df)
+
+            if result_dict["leftover"] < 0:
+                st.warning(
+                    "Your expenses add up to more than your income. "
+                    f"You're short by about {abs(result_dict['leftover']):,.0f} PKR this month."
+                )
+            elif result_dict["leftover"] > 0:
+                st.caption(
+                    f"You have about {result_dict['leftover']:,.0f} PKR left over that wasn't "
+                    "assigned to a savings category. Consider adding it as a Savings, "
+                    "Committee, or Emergency fund entry above."
+                )
 
             if result_dict["debt_risk_flag"]:
                 st.warning(
