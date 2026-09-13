@@ -28,20 +28,29 @@ def build_explanation_prompt(result_dict):
         "Do not recalculate any numbers, only explain the ones given. "
         "If debt_risk_flag is true, explain clearly and gently why that "
         "matters, without being alarming. "
+        "Keep the whole response under 200 words and at most 3 short "
+        "bullet points, so it fits in a short reply and never gets cut "
+        "off mid-sentence. "
         "Always end with a short note that this is educational, not "
         "licensed financial advice.\n\n"
         f"Budget data: {result_dict}"
     )
 
 
-def call_groq(client, messages):
+def call_groq(client, messages, max_tokens=700):
     try:
         response = client.chat.completions.create(
             messages=messages,
             model="openai/gpt-oss-120b",
-            max_tokens=500,
+            max_tokens=max_tokens,
         )
-        return response.choices[0].message.content
+        choice = response.choices[0]
+        content = choice.message.content
+        if choice.finish_reason == "length":
+            # The model hit the token cap before finishing. Rather than
+            # show a truncated, half-formatted response, say so plainly.
+            content += "\n\n*(Response was shortened to fit here.)*"
+        return content
     except Exception as e:
         # Log the real error to Streamlit Cloud's server logs (visible
         # under "Manage app") for debugging, but never expose raw API
