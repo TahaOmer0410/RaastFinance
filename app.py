@@ -43,11 +43,10 @@ def call_groq(client, messages):
         )
         return response.choices[0].message.content
     except Exception as e:
-        # Surface the real error instead of hiding it. A generic
-        # "unavailable" message with no detail makes every failure
-        # mode (bad key, wrong model name, rate limit, network) look
-        # identical and impossible to debug from the UI.
-        st.error(f"Groq API call failed: {type(e).__name__}: {e}")
+        # Log the real error to Streamlit Cloud's server logs (visible
+        # under "Manage app") for debugging, but never expose raw API
+        # error internals to end users.
+        print(f"Groq API call failed: {type(e).__name__}: {e}")
         return (
             "The explanation service is temporarily unavailable. "
             "Please review the numbers above directly for now."
@@ -79,6 +78,33 @@ if "expense_rows" not in st.session_state:
     st.session_state.expense_rows = [{"category": EXPENSE_CATEGORY_OPTIONS[0], "custom": "", "amount": 0.0}]
 
 st.subheader("Monthly income and expenses")
+
+if st.button("Try an example (Amina's budget)"):
+    example_rows = [
+        {"category": "Rent", "custom": "", "amount": 12000.0},
+        {"category": "Groceries", "custom": "", "amount": 9000.0},
+        {"category": "Transport", "custom": "", "amount": 4000.0},
+        {"category": "Mobile recharge", "custom": "", "amount": 1500.0},
+        {"category": "Eating out", "custom": "", "amount": 3000.0},
+    ]
+    st.session_state.expense_rows = example_rows
+    st.session_state.income_input = 45000.0
+    # Widgets keep their own value once a key exists, ignoring a new
+    # index=/value= default on rerun. Set the widget keys directly so
+    # already-rendered rows actually pick up the example values.
+    for i, row in enumerate(example_rows):
+        st.session_state[f"cat_{i}"] = row["category"]
+        st.session_state[f"custom_{i}"] = row["custom"]
+        st.session_state[f"amt_{i}"] = row["amount"]
+    # Clear any extra rows left over from a longer previous list.
+    j = len(example_rows)
+    while f"cat_{j}" in st.session_state:
+        st.session_state.pop(f"cat_{j}", None)
+        st.session_state.pop(f"custom_{j}", None)
+        st.session_state.pop(f"amt_{j}", None)
+        j += 1
+    st.rerun()
+
 income = st.number_input("Monthly income (PKR)", min_value=0.0, step=500.0, key="income_input")
 
 st.write("Add each expense below. Pick a category, or choose 'Other' to add your own label.")
@@ -103,11 +129,21 @@ for i in range(len(st.session_state.expense_rows)):
 add_col, remove_col = st.columns(2)
 with add_col:
     if st.button("+ Add another expense"):
+        new_index = len(st.session_state.expense_rows)
+        # Clear any stale widget state left over from a row that
+        # previously occupied this index and was removed.
+        st.session_state.pop(f"cat_{new_index}", None)
+        st.session_state.pop(f"custom_{new_index}", None)
+        st.session_state.pop(f"amt_{new_index}", None)
         st.session_state.expense_rows.append({"category": EXPENSE_CATEGORY_OPTIONS[0], "custom": "", "amount": 0.0})
         st.rerun()
 with remove_col:
     if len(st.session_state.expense_rows) > 1 and st.button("- Remove last expense"):
+        removed_index = len(st.session_state.expense_rows) - 1
         st.session_state.expense_rows.pop()
+        st.session_state.pop(f"cat_{removed_index}", None)
+        st.session_state.pop(f"custom_{removed_index}", None)
+        st.session_state.pop(f"amt_{removed_index}", None)
         st.rerun()
 
 submitted = st.button("Analyze my budget")
@@ -142,6 +178,18 @@ if submitted:
                 ],
             }).set_index("Category")
             st.bar_chart(chart_df)
+
+            income_for_pct = result_dict["income"] if result_dict["income"] else 1.0
+            pct_col1, pct_col2, pct_col3 = st.columns(3)
+            pct_col1.metric("Needs", f"{result_dict['needs_total'] / income_for_pct * 100:.0f}%")
+            pct_col2.metric("Wants", f"{result_dict['wants_total'] / income_for_pct * 100:.0f}%")
+            pct_col3.metric("Savings", f"{result_dict['savings_total'] / income_for_pct * 100:.0f}%")
+
+            st.metric(
+                "Debt-to-income ratio",
+                f"{result_dict['debt_to_income_ratio'] * 100:.0f}%",
+                help=f"Ratios above {DEBT_TO_INCOME_WARNING_THRESHOLD * 100:.0f}% are generally considered risky.",
+            )
 
             if result_dict["leftover"] < 0:
                 st.warning(
