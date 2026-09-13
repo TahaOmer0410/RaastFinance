@@ -3,3 +3,4 @@ groq==1.7.0
 faiss-cpu==1.15.0
 sentence-transformers==6.0.1
 numpy==2.5.3
+torchvision==0.26.0
